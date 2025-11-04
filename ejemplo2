@@ -1,0 +1,22 @@
+@0010 0005        ; N=5
+@0011 0000        ; CONSTANTE 0
+@0012 0001        ; CONSTANTE 1
+@0014 0000        ; Temp para A (suma)
+@0015 0000        ; Temp para B (salvar acumulador)
+
+RED A 0010        ; A = 5
+RED B 0011        ; B = 0
+WRT B 0015        ; Salva B (0) antes de empezar el bucle
+
+RED B 0015        ; 1. Restaura B (B=0, 5, 9, 12, 14)
+WRT A 0014        ; 2. mem[0x14] = A (A=5, 4, 3, 2, 1)
+ADD B 0014        ; 3. B = B + A (B=5, 9, 12, 14, 15)
+SUB A 0012        ; 4. A = A - 1 (A=4, 3, 2, 1, 0). Si A=0 -> Z=1
+BEQ A 000B        ; 5. Si Z=1 (A==0), SALTA a FIN (PC=11)
+
+WRT B 0015        ; 6. Salva el nuevo B (ej: 15) en mem[0x15]
+RED B 0011        ; 7. Carga B=0 (de mem[0x11]) para forzar Z=1
+BEQ B 0003        ; 8. Salta incondicionalmente a PC=3 (INICIO BUCLE)
+
+WRT B 0077        ; Imprime B (debería ser 15)
+HLT

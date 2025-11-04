@@ -3,37 +3,33 @@
 #include <string.h>
 #include <stdint.h>
 
-uint16_t memoria[MEM_SIZE]; // crea ela array
+#define MEM_SIZE 4096
+
+uint16_t PUERTO_SALIDA = 0x0077;
+
+uint16_t memoria[MEM_SIZE];
 uint16_t A = 0, B = 0;
 uint8_t z = 0;
 uint16_t pc = 0;
 
-/*
-Escribe un valor en la memoria
-/
+/* ==== Funciones de memoria ==== */
 void mem_write(uint16_t address, uint16_t value) {
-    // comprueba que la direccion este en rango valido
-    if (address < MEM_SIZE) { 
-        mem[address] = value; // escribe el valor en la posicion
-    } else {
+    if (address < MEM_SIZE)
+        memoria[address] = value;
+    else
         printf("Error: Dirección fuera de rango\n");
-    }
-
 }
 
-/
-Lee el valor guardado en la posicion address
-*/
 uint16_t mem_read(uint16_t address) {
-    // comprueba que la direccion este en rango valido
-    if (address < MEM_SIZE){ 
-        return memoria[address]; // devuelve el valor almacendo
-    } else {
+    if (address < MEM_SIZE)
+        return memoria[address];
+    else {
         printf("Error: Dirección fuera de rango\n");
         return 0;
     }
 }
 
+/* ==== Diccionario de instrucciones ==== */
 int obtener_opcode(const char *instr) {
     if (strcmp(instr, "ADD") == 0) return 0b000;
     if (strcmp(instr, "SUB") == 0) return 0b001;
@@ -50,28 +46,43 @@ int registro_valido(char r) {
     return (r == 'A' || r == 'B');
 }
 
+/* ==== Carga del programa ==== */
 int cargarPrograma(char *ruta) {
     FILE *programa = fopen(ruta, "r");
     if (programa == NULL) {
-        perror("Error al abrir el archivo del programa.");
+        perror("Error al abrir el archivo del programa");
         return 1;
     }
 
     char linea[256];
     int nLinea = 0;
-    int pc = 0;
+    pc = 0;
+
     while (fgets(linea, sizeof(linea), programa)) {
         nLinea++;
         linea[strcspn(linea, "\n")] = 0;
         if (strlen(linea) == 0) continue;
 
-        // Parsear campos
-        char *instr = strtok(linea, "\t");
-        char *reg = strtok(NULL, "\t");
-        char *dir = strtok(NULL, "\t");
+        // Línea de datos: formato @direccion valor
+        if (linea[0] == '@') {
+            char *dir_str = strtok(linea + 1, "\t ");
+            char *val_str = strtok(NULL, "\t ");
+            if (!dir_str || !val_str) {
+                fprintf(stderr, "Error en línea %d: formato de dato inválido\n", nLinea);
+                return 1;
+            }
+            unsigned int dir = strtol(dir_str, NULL, 16);
+            unsigned int val = strtol(val_str, NULL, 16);
+            memoria[dir] = (uint16_t)val;
+            continue;
+        }
+
+        // Línea de instrucción
+        char *instr = strtok(linea, "\t ");
+        char *reg = strtok(NULL, "\t ");
+        char *dir = strtok(NULL, "\t ");
 
         if (!instr) continue;
-
         int opcode = obtener_opcode(instr);
         if (opcode == -1) {
             fprintf(stderr, "Error en línea %d: instrucción inválida '%s'\n", nLinea, instr);
@@ -79,15 +90,12 @@ int cargarPrograma(char *ruta) {
         }
 
         uint16_t palabra = 0;
-
-        // Caso especial: HLT no tiene operandos
-        if (opcode == 0b111) {
+        if (opcode == 0b111) { // HLT
             palabra = (opcode << 13);
             memoria[pc++] = palabra;
             continue;
         }
 
-        // Validar campos
         if (!reg || !dir) {
             fprintf(stderr, "Error en línea %d: faltan argumentos\n", nLinea);
             return 1;
@@ -98,81 +106,47 @@ int cargarPrograma(char *ruta) {
             return 1;
         }
 
-        unsigned int direccion = (unsigned int)strtol(dir, NULL, 16);
+        unsigned int direccion = strtol(dir, NULL, 16);
         if (direccion >= MEM_SIZE) {
             fprintf(stderr, "Error en línea %d: dirección fuera de rango (0x%X)\n", nLinea, direccion);
             return 1;
         }
 
         uint16_t reg_bit = (reg[0] == 'A') ? 0 : 1;
-
-        // Codificar: [15:13]=opcode | [12]=reg | [11:0]=direccion
         palabra = (opcode << 13) | (reg_bit << 12) | (direccion & 0x0FFF);
-
         if (pc >= MEM_SIZE) {
             fprintf(stderr, "Error: memoria llena en línea %d\n", nLinea);
             return 1;
         }
-
         memoria[pc++] = palabra;
     }
 
     fclose(programa);
+    return 0;
 }
 
-void print_bin16(uint16_t value) {
-    for (int i = 15; i >= 0; i--) {
-        putchar((value & (1 << i)) ? '1' : '0');
-        if (i % 4 == 0 && i != 0) putchar(' '); // separador cada 4 bits
-    }
+/* ==== Instrucciones ==== */
+void instr_read(uint8_t reg, uint16_t dir) {
+    if (reg) B = memoria[dir], z = (B == 0);
+    else A = memoria[dir], z = (A == 0);
 }
 
-void read(uint8_t reg, uint16_t dir) {
-    if (reg) {
-        B = memoria[dir];
-        z = (B == 0);
-    } else {
-        A = memoria[dir];
-        z = (A == 0);
-    }
+void instr_add(uint8_t reg, uint16_t dir) {
+    if (reg) B += memoria[dir], z = (B == 0);
+    else A += memoria[dir], z = (A == 0);
 }
 
-/* ADD: Suma memoria[dir] al registro seleccionado */
-void add(uint8_t reg, uint16_t dir) {
-    if (reg) {
-        uint32_t tmp = (uint32_t)B + memoria[dir];
-        B = (uint16_t)tmp;
-        z = (B == 0);
-    } else {
-        uint32_t tmp = (uint32_t)A + memoria[dir];
-        A = (uint16_t)tmp;
-        z = (A == 0);
-    }
+void instr_and(uint8_t reg, uint16_t dir) {
+    if (reg) B &= memoria[dir], z = (B == 0);
+    else A &= memoria[dir], z = (A == 0);
 }
 
-/* AND: AND bit a bit entre el registro y memoria[dir] */
-void and(uint8_t reg, uint16_t dir) {
-    if (reg) {
-        B &= memoria[dir];
-        z = (B == 0);
-    } else {
-        A &= memoria[dir];
-        z = (A == 0);
-    }
+void instr_or(uint8_t reg, uint16_t dir) {
+    if (reg) B |= memoria[dir], z = (B == 0);
+    else A |= memoria[dir], z = (A == 0);
 }
 
-/* OR: OR bit a bit entre el registro y memoria[dir] */
-void or(uint8_t reg, uint16_t dir) {
-    if (reg) {
-        B |= memoria[dir];
-        z = (B == 0);
-    } else {
-        A |= memoria[dir];
-        z = (A == 0);
-    }
-}
-
-void instr_write(int registro_bit, uint16_t direccion) {
+void instr_write(uint8_t registro_bit, uint16_t direccion) {
     if (direccion == PUERTO_SALIDA) {
         if (registro_bit == 0) {
             printf("SALIDA (A): %u\n", A);
@@ -189,34 +163,25 @@ void instr_write(int registro_bit, uint16_t direccion) {
     }
 }
 
-void instr_beq(uint16_t direccion) {
-    if (z == 1) {
-        pc = direccion; 
-    }
+
+void instr_sub(uint8_t reg, uint16_t dir) {
+    if (reg) B -= memoria[dir], z = (B == 0);
+    else A -= memoria[dir], z = (A == 0);
 }
 
-void instr_sub(int registro_bit, uint16_t direccion) {
-    uint16_t valor_memoria = memoria[direccion];
-    if (registro_bit == 0) { 
-        A = A - valor_memoria;
-        z = (A == 0) ? 1 : 0;
-    } else { 
-        B = B - valor_memoria;
-
-        z = (B == 0) ? 1 : 0;
-    }
+void instr_beq(uint16_t dir) {
+    if (z) pc = dir;
 }
 
-
+/* ==== Bucle principal ==== */
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Uso: %s <ruta_del_archivo_del_programa>\n", argv[0]);
         return 1;
     }
 
-    if (cargarPrograma(argv[1]) == 1) {
+    if (cargarPrograma(argv[1]) == 1)
         return 1;
-    }
 
     pc = 0;
     int halt = 0;
@@ -243,16 +208,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("Ejecución finalizada.\n");
-    printf("Registro A = %u, Registro B = %u\n", A, B);
-
-    /*
-    printf("\n=== Primeras 10 posiciones de memoria ===\n");
-    for (int i = 0; i < 10; i++) {
-        printf("Dir 0x%03X : 0x%04X (", i, memoria[i]);
-        print_bin16(memoria[i]);
-        printf(")\n");
-    }*/
-
+    printf("Ejecución finalizada.\nRegistro A = %u, Registro B = %u\n", A, B);
     return 0;
 }
